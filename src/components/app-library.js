@@ -1,5 +1,6 @@
 import { googleAuth } from '../lib/google-auth.js'
 import { driveClient } from '../lib/drive-client.js'
+import './settings-modal.js'
 
 class AppLibrary extends HTMLElement {
   constructor() {
@@ -31,16 +32,13 @@ class AppLibrary extends HTMLElement {
     this.render()
   }
 
-  async handleCreateApp() {
-    const name = prompt('Enter app name:')
-    if (!name) return
+  handleCreateApp() {
+    window.location.hash = '#/create'
+  }
 
-    try {
-      const app = await driveClient.createApp(name)
-      window.location.hash = `#/app/${app.id}/edit`
-    } catch (err) {
-      alert('Failed to create app: ' + err.message)
-    }
+  openSettings() {
+    const modal = this.querySelector('settings-modal')
+    if (modal) modal.open()
   }
 
   async handleDeleteApp(appId, appName) {
@@ -94,6 +92,12 @@ class AppLibrary extends HTMLElement {
       createBtn.addEventListener('click', () => this.handleCreateApp())
     }
 
+    // Settings button
+    const settingsBtn = this.querySelector('[data-action="settings"]')
+    if (settingsBtn) {
+      settingsBtn.addEventListener('click', () => this.openSettings())
+    }
+
     // Delete buttons
     this.querySelectorAll('[data-action="delete-app"]').forEach(btn => {
       btn.addEventListener('click', (e) => {
@@ -112,10 +116,12 @@ class AppLibrary extends HTMLElement {
       <div class="library">
         <header class="library-header">
           <h1>tiny-app.dev</h1>
-          ${isSignedIn
-            ? `<button class="secondary" data-action="sign-out">Sign Out</button>`
-            : ''
-          }
+          <div class="header-actions">
+            ${isSignedIn ? `
+              <button class="icon-btn" data-action="settings" title="Settings">⚙️</button>
+              <button class="secondary" data-action="sign-out">Sign Out</button>
+            ` : ''}
+          </div>
         </header>
 
         ${!isSignedIn ? `
@@ -153,6 +159,8 @@ class AppLibrary extends HTMLElement {
             </ul>
           `}
         `}
+
+        <settings-modal></settings-modal>
       </div>
 
       <style>
@@ -172,6 +180,20 @@ class AppLibrary extends HTMLElement {
         .library-header h1 {
           margin: 0;
           font-size: 24px;
+        }
+
+        .header-actions {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .icon-btn {
+          background: none;
+          border: none;
+          font-size: 20px;
+          cursor: pointer;
+          padding: 4px 8px;
         }
 
         .connect-prompt {

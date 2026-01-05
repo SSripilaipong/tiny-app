@@ -2,6 +2,7 @@ import './styles/main.css'
 import './components/app-library.js'
 import './components/app-runner.js'
 import './components/app-editor.js'
+import './components/app-creator.js'
 import './components/session-manager.js'
 import { googleAuth } from './lib/google-auth.js'
 
@@ -18,7 +19,9 @@ function route() {
   }
 
   // Route to components
-  if (hash.startsWith('#/app/')) {
+  if (hash === '#/create') {
+    app.innerHTML = '<app-creator></app-creator>'
+  } else if (hash.startsWith('#/app/')) {
     const appId = hash.slice(6).split('/')[0]
     const mode = hash.includes('/edit') ? 'edit' : 'run'
     if (mode === 'edit') {

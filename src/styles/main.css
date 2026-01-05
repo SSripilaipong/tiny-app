@@ -36,6 +36,11 @@ button.secondary:hover {
   background: #d0d0d0;
 }
 
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 input, textarea {
   padding: 8px;
   border: 1px solid #ddd;
