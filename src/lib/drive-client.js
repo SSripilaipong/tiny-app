@@ -6,6 +6,8 @@ const ROOT_FOLDER_NAME = 'tiny-app.dev'
 const CACHE_PREFIX = 'tiny_app_cache_'
 const APP_CACHE_KEY = 'tiny_app_files_cache'
 const APP_CACHE_MAX = 4
+const SESSION_CACHE_KEY = 'tiny_app_sessions_cache'
+const SESSION_CACHE_MAX = 10
 
 class DriveClient {
   constructor() {
@@ -75,6 +77,46 @@ class DriveClient {
   getAppFromCache(appId) {
     const cache = this.getAppCache()
     return cache[appId] || null
+  }
+
+  // ============ Session LRU cache ============
+
+  getSessionCache() {
+    try {
+      const data = localStorage.getItem(SESSION_CACHE_KEY)
+      return data ? JSON.parse(data) : {}
+    } catch {
+      return {}
+    }
+  }
+
+  setSessionCache(sessionId, data) {
+    try {
+      const cache = this.getSessionCache()
+
+      // Add/update entry with timestamp for LRU
+      cache[sessionId] = {
+        ...data,
+        cachedAt: Date.now()
+      }
+
+      // LRU eviction if over limit
+      const entries = Object.entries(cache)
+      if (entries.length > SESSION_CACHE_MAX) {
+        entries.sort((a, b) => a[1].cachedAt - b[1].cachedAt)
+        const toRemove = entries.slice(0, entries.length - SESSION_CACHE_MAX)
+        toRemove.forEach(([id]) => delete cache[id])
+      }
+
+      localStorage.setItem(SESSION_CACHE_KEY, JSON.stringify(cache))
+    } catch (e) {
+      console.warn('Session cache write failed:', e)
+    }
+  }
+
+  getSessionFromCache(sessionId) {
+    const cache = this.getSessionCache()
+    return cache[sessionId] || null
   }
 
   // ============ API helpers ============
@@ -473,13 +515,11 @@ class DriveClient {
   }
 
   async getSession(sessionId, forceRefresh = false) {
-    const cacheKey = `session_${sessionId}`
-
-    // Check cache first unless force refresh
+    // Check LRU cache first unless force refresh
     if (!forceRefresh) {
-      const cached = this.cacheGet(cacheKey)
+      const cached = this.getSessionFromCache(sessionId)
       if (cached) {
-        return { ...cached.data, syncTime: cached.syncTime }
+        return { ...cached.data, syncTime: cached.cachedAt }
       }
     }
 
@@ -487,18 +527,17 @@ class DriveClient {
     const content = await this.getFileContent(sessionId)
     const data = JSON.parse(content)
 
-    // Cache the result
-    const syncTime = Date.now()
-    this.cacheSet(cacheKey, { data, syncTime })
+    // Cache the result in LRU cache
+    this.setSessionCache(sessionId, { data })
 
-    return { ...data, syncTime }
+    return { ...data, syncTime: Date.now() }
   }
 
   async saveSession(sessionId, data) {
     const result = await this.updateFile(sessionId, JSON.stringify(data, null, 2))
 
-    // Update cache
-    this.cacheSet(`session_${sessionId}`, { data, syncTime: Date.now() })
+    // Update LRU cache
+    this.setSessionCache(sessionId, { data })
 
     return result
   }
@@ -518,8 +557,8 @@ class DriveClient {
       JSON.stringify(sessionData, null, 2)
     )
 
-    // Cache session
-    this.cacheSet(`session_${file.id}`, sessionData)
+    // Cache session in LRU cache
+    this.setSessionCache(file.id, { data: sessionData })
 
     // Invalidate session list cache (will be refreshed on next listSessions)
     this.cacheDelete(`sessions_${appId}`)
