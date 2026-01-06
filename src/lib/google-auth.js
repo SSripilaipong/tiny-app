@@ -1,5 +1,5 @@
 // Google OAuth configuration
-const CLIENT_ID = '773776265530-r1pkal1edrhns131h61lk7hi6ufm19sr.apps.googleusercontent.com'
+const CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID
 const SCOPES = 'https://www.googleapis.com/auth/drive.file'
 const REDIRECT_URI = window.location.origin + '/'
 
