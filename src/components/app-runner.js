@@ -15,6 +15,8 @@ class AppRunner extends HTMLElement {
     this.iframe = null
     this._mounted = false
     this.syncTime = null
+    this.hasUnsavedChanges = false
+    this.saving = false
   }
 
   static get observedAttributes() {
@@ -94,7 +96,6 @@ class AppRunner extends HTMLElement {
       const session = await driveClient.createSession(this.appId, name)
       this.currentSession = { id: session.id, ...session.data }
       this.sessions = await driveClient.listSessions(this.appId)
-      this.render()
     } catch (err) {
       console.error('Failed to create session:', err)
     }
@@ -109,15 +110,22 @@ class AppRunner extends HTMLElement {
     const name = prompt('Session name:')
     if (name) {
       await this.createSession(name)
+      this.render()
       this.sendInitToIframe()
     }
   }
 
   handleMessage(event) {
+    // Get current iframe (don't use stale reference)
+    const iframe = this.querySelector('.app-iframe')
+
     // Security: only accept messages from our iframe
-    if (!this.iframe || event.source !== this.iframe.contentWindow) {
+    if (!iframe || event.source !== iframe.contentWindow) {
       return
     }
+
+    // Update reference for sendInitToIframe/sendMessageToIframe
+    this.iframe = iframe
 
     const { type, data } = event.data || {}
 
@@ -148,12 +156,18 @@ class AppRunner extends HTMLElement {
 
     this.currentSession.data = data
 
-    // Save immediately (no debounce)
-    this.saveCurrentSession()
+    // Mark as unsaved, update UI
+    if (!this.hasUnsavedChanges) {
+      this.hasUnsavedChanges = true
+      this.updateSyncBar()
+    }
   }
 
   async saveCurrentSession() {
-    if (!this.currentSession) return
+    if (!this.currentSession || this.saving) return
+
+    this.saving = true
+    this.updateSyncBar()
 
     try {
       await driveClient.saveSession(this.currentSession.id, {
@@ -161,12 +175,67 @@ class AppRunner extends HTMLElement {
         createdAt: this.currentSession.createdAt,
         data: this.currentSession.data
       })
+      // Update state
+      this.hasUnsavedChanges = false
+      this.syncTime = Date.now()
       // Notify iframe that save succeeded
       this.sendMessageToIframe({ type: 'session-saved', success: true })
     } catch (err) {
       console.error('Failed to save session:', err)
       // Notify iframe that save failed
       this.sendMessageToIframe({ type: 'session-saved', success: false, error: err.message })
+    }
+
+    this.saving = false
+    this.updateSyncBar()
+  }
+
+  async handleSave() {
+    await this.saveCurrentSession()
+  }
+
+  updateSyncBar() {
+    const syncBar = this.querySelector('.sync-bar')
+    if (!syncBar) return
+
+    const syncText = this.saving
+      ? 'Saving...'
+      : this.hasUnsavedChanges
+        ? 'Unsaved changes'
+        : `Synced ${this.formatSyncTime(this.syncTime)}`
+
+    const disableAll = this.saving
+
+    syncBar.innerHTML = `
+      <span class="sync-time ${this.saving ? 'saving' : this.hasUnsavedChanges ? 'unsaved' : ''}">${syncText}</span>
+      <button class="sync-btn" data-action="save" ${disableAll || !this.hasUnsavedChanges ? 'disabled' : ''}>Save</button>
+      <button class="sync-btn" data-action="reload" ${disableAll ? 'disabled' : ''}>↻ Reload</button>
+    `
+
+    // Rebind events for new buttons
+    const saveBtn = syncBar.querySelector('[data-action="save"]')
+    if (saveBtn) {
+      saveBtn.addEventListener('click', () => this.handleSave())
+    }
+    const reloadBtn = syncBar.querySelector('[data-action="reload"]')
+    if (reloadBtn) {
+      reloadBtn.addEventListener('click', () => this.handleReload())
+    }
+
+    // Toggle iframe overlay
+    const overlay = this.querySelector('.iframe-overlay')
+    if (overlay) {
+      overlay.classList.toggle('active', this.saving)
+    }
+
+    // Toggle header buttons
+    const backBtn = this.querySelector('[data-action="back"]')
+    if (backBtn) {
+      backBtn.disabled = this.saving
+    }
+    const editBtn = this.querySelector('[data-action="edit"]')
+    if (editBtn) {
+      editBtn.disabled = this.saving
     }
   }
 
@@ -237,6 +306,11 @@ class AppRunner extends HTMLElement {
       reloadBtn.addEventListener('click', () => this.handleReload())
     }
 
+    const saveBtn = this.querySelector('[data-action="save"]')
+    if (saveBtn) {
+      saveBtn.addEventListener('click', () => this.handleSave())
+    }
+
     // Session manager events
     const sessionManager = this.querySelector('session-manager')
     if (sessionManager) {
@@ -271,15 +345,17 @@ class AppRunner extends HTMLElement {
           <div class="loading">Loading app...</div>
         ` : `
           <div class="sync-bar">
-            <span class="sync-time">Synced ${this.formatSyncTime(this.syncTime)}</span>
+            <span class="sync-time ${this.hasUnsavedChanges ? 'unsaved' : ''}">${this.hasUnsavedChanges ? 'Unsaved changes' : `Synced ${this.formatSyncTime(this.syncTime)}`}</span>
+            <button class="sync-btn" data-action="save" ${!this.hasUnsavedChanges ? 'disabled' : ''}>Save</button>
             <button class="sync-btn" data-action="reload">↻ Reload</button>
           </div>
           <div class="runner-content">
             <iframe
               class="app-iframe"
-              sandbox="allow-scripts"
+              sandbox="allow-scripts allow-modals"
               srcdoc="${this.escapeAttr(this.appHtml || '')}"
             ></iframe>
+            <div class="iframe-overlay"></div>
           </div>
         `}
       </div>
@@ -342,20 +418,48 @@ class AppRunner extends HTMLElement {
           cursor: pointer;
         }
 
-        .sync-btn:hover {
+        .sync-btn:hover:not(:disabled) {
           background: #e8e8e8;
+        }
+
+        .sync-btn:disabled {
+          opacity: 0.5;
+          cursor: default;
+        }
+
+        .sync-time.unsaved {
+          color: #e67700;
+          font-weight: 500;
         }
 
         .runner-content {
           flex: 1;
           display: flex;
           background: white;
+          position: relative;
         }
 
         .app-iframe {
           flex: 1;
           border: none;
           background: white;
+        }
+
+        .iframe-overlay {
+          display: none;
+          position: absolute;
+          inset: 0;
+          background: rgba(255, 255, 255, 0.7);
+          cursor: wait;
+        }
+
+        .iframe-overlay.active {
+          display: block;
+        }
+
+        .sync-time.saving {
+          color: #666;
+          font-style: italic;
         }
       </style>
     `

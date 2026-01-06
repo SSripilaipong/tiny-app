@@ -237,20 +237,26 @@ class DriveClient {
     this.cacheSet(`fileId_${appId}_app.html`, appHtmlFile.id)
     this.cacheSet(`fileId_${appId}_params.json`, paramsFile.id)
 
-    // Cache app files content
-    this.cacheSet(`appFiles_${appId}`, { manifest, params, appHtml })
+    // Cache app files in LRU cache
+    this.setAppCache(appId, { manifest, params, appHtml, syncTime: Date.now() })
 
     return { id: appId, name }
   }
 
   async deleteApp(appId) {
-    // Clear all caches for this app
-    this.cacheDelete(`appFiles_${appId}`)
+    // Clear caches for this app
     this.cacheDelete(`sessionsFolderId_${appId}`)
     this.cacheDelete(`sessions_${appId}`)
     this.cacheDelete(`fileId_${appId}_manifest.json`)
     this.cacheDelete(`fileId_${appId}_app.html`)
     this.cacheDelete(`fileId_${appId}_params.json`)
+
+    // Clear from LRU app cache
+    const cache = this.getAppCache()
+    if (cache[appId]) {
+      delete cache[appId]
+      localStorage.setItem(APP_CACHE_KEY, JSON.stringify(cache))
+    }
 
     return this.request(`${DRIVE_API}/files/${appId}`, {
       method: 'PATCH',
@@ -388,25 +394,35 @@ class DriveClient {
   }
 
   async saveManifest(appId, manifest) {
-    // No caching - just save to Drive
     const file = await this.findFile(appId, 'manifest.json')
     const content = JSON.stringify(manifest, null, 2)
-    if (file) {
-      return this.updateFile(file.id, content)
-    } else {
-      return this.createFile(appId, 'manifest.json', content)
+    const result = file
+      ? await this.updateFile(file.id, content)
+      : await this.createFile(appId, 'manifest.json', content)
+
+    // Update cache
+    const cached = this.getAppFromCache(appId)
+    if (cached) {
+      this.setAppCache(appId, { ...cached, manifest })
     }
+
+    return result
   }
 
   async saveParams(appId, params) {
-    // No caching - just save to Drive
     const file = await this.findFile(appId, 'params.json')
     const content = JSON.stringify(params, null, 2)
-    if (file) {
-      return this.updateFile(file.id, content)
-    } else {
-      return this.createFile(appId, 'params.json', content)
+    const result = file
+      ? await this.updateFile(file.id, content)
+      : await this.createFile(appId, 'params.json', content)
+
+    // Update cache
+    const cached = this.getAppFromCache(appId)
+    if (cached) {
+      this.setAppCache(appId, { ...cached, params })
     }
+
+    return result
   }
 
   // ============ Session operations (cached) ============
