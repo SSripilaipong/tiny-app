@@ -386,6 +386,23 @@ class DriveClient {
 
   // ============ App files (cached) ============
 
+  async listAppFiles(appId) {
+    // List all files in app folder with ONE query instead of multiple findFile calls
+    const query = `'${appId}' in parents and trashed=false`
+    const result = await this.request(
+      `${DRIVE_API}/files?q=${encodeURIComponent(query)}&fields=files(id,name)`
+    )
+
+    // Build a map of filename -> id
+    const fileMap = {}
+    for (const file of result.files) {
+      fileMap[file.name] = file.id
+      // Also cache individual file IDs for other methods
+      this.cacheSet(`fileId_${appId}_${file.name}`, file.id)
+    }
+    return fileMap
+  }
+
   async getAppFiles(appId, forceRefresh = false) {
     // Check cache first unless force refresh
     if (!forceRefresh) {
@@ -400,11 +417,14 @@ class DriveClient {
       }
     }
 
-    // Fetch from Drive
+    // Get all file IDs with single query
+    const fileMap = await this.listAppFiles(appId)
+
+    // Fetch content in parallel
     const [manifest, params, appHtml] = await Promise.all([
-      this.findFile(appId, 'manifest.json').then(f => f ? this.getFileContent(f.id) : null),
-      this.findFile(appId, 'params.json').then(f => f ? this.getFileContent(f.id) : null),
-      this.findFile(appId, 'app.html').then(f => f ? this.getFileContent(f.id) : null)
+      fileMap['manifest.json'] ? this.getFileContent(fileMap['manifest.json']) : null,
+      fileMap['params.json'] ? this.getFileContent(fileMap['params.json']) : null,
+      fileMap['app.html'] ? this.getFileContent(fileMap['app.html']) : null
     ])
 
     const result = {
