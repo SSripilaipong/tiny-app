@@ -4,6 +4,8 @@ const DRIVE_API = 'https://www.googleapis.com/drive/v3'
 const UPLOAD_API = 'https://www.googleapis.com/upload/drive/v3'
 const ROOT_FOLDER_NAME = 'tiny-app.dev'
 const CACHE_PREFIX = 'tiny_app_cache_'
+const APP_CACHE_KEY = 'tiny_app_files_cache'
+const APP_CACHE_MAX = 4
 
 class DriveClient {
   constructor() {
@@ -33,6 +35,46 @@ class DriveClient {
 
   cacheDelete(key) {
     localStorage.removeItem(CACHE_PREFIX + key)
+  }
+
+  // ============ App files LRU cache ============
+
+  getAppCache() {
+    try {
+      const data = localStorage.getItem(APP_CACHE_KEY)
+      return data ? JSON.parse(data) : {}
+    } catch {
+      return {}
+    }
+  }
+
+  setAppCache(appId, data) {
+    try {
+      const cache = this.getAppCache()
+
+      // Add/update entry with timestamp for LRU
+      cache[appId] = {
+        ...data,
+        cachedAt: Date.now()
+      }
+
+      // LRU eviction if over limit
+      const entries = Object.entries(cache)
+      if (entries.length > APP_CACHE_MAX) {
+        entries.sort((a, b) => a[1].cachedAt - b[1].cachedAt)
+        const toRemove = entries.slice(0, entries.length - APP_CACHE_MAX)
+        toRemove.forEach(([id]) => delete cache[id])
+      }
+
+      localStorage.setItem(APP_CACHE_KEY, JSON.stringify(cache))
+    } catch (e) {
+      console.warn('App cache write failed:', e)
+    }
+  }
+
+  getAppFromCache(appId) {
+    const cache = this.getAppCache()
+    return cache[appId] || null
   }
 
   // ============ API helpers ============
@@ -297,28 +339,52 @@ class DriveClient {
   // ============ App files (cached) ============
 
   async getAppFiles(appId, forceRefresh = false) {
-    // No caching - always fetch from Drive
+    // Check cache first unless force refresh
+    if (!forceRefresh) {
+      const cached = this.getAppFromCache(appId)
+      if (cached) {
+        return {
+          manifest: cached.manifest,
+          params: cached.params,
+          appHtml: cached.appHtml,
+          syncTime: cached.cachedAt
+        }
+      }
+    }
+
+    // Fetch from Drive
     const [manifest, params, appHtml] = await Promise.all([
       this.findFile(appId, 'manifest.json').then(f => f ? this.getFileContent(f.id) : null),
       this.findFile(appId, 'params.json').then(f => f ? this.getFileContent(f.id) : null),
       this.findFile(appId, 'app.html').then(f => f ? this.getFileContent(f.id) : null)
     ])
 
-    return {
+    const result = {
       manifest: manifest ? JSON.parse(manifest) : null,
       params: params ? JSON.parse(params) : null,
       appHtml
     }
+
+    // Cache the result
+    const syncTime = Date.now()
+    this.setAppCache(appId, { ...result, syncTime })
+
+    return { ...result, syncTime }
   }
 
   async saveAppHtml(appId, content) {
-    // No caching - just save to Drive
     const file = await this.findFile(appId, 'app.html')
-    if (file) {
-      return this.updateFile(file.id, content)
-    } else {
-      return this.createFile(appId, 'app.html', content)
+    const result = file
+      ? await this.updateFile(file.id, content)
+      : await this.createFile(appId, 'app.html', content)
+
+    // Update cache with new content
+    const cached = this.getAppFromCache(appId)
+    if (cached) {
+      this.setAppCache(appId, { ...cached, appHtml: content })
     }
+
+    return result
   }
 
   async saveManifest(appId, manifest) {
@@ -391,14 +457,34 @@ class DriveClient {
   }
 
   async getSession(sessionId, forceRefresh = false) {
-    // No caching - always fetch from Drive
+    const cacheKey = `session_${sessionId}`
+
+    // Check cache first unless force refresh
+    if (!forceRefresh) {
+      const cached = this.cacheGet(cacheKey)
+      if (cached) {
+        return { ...cached.data, syncTime: cached.syncTime }
+      }
+    }
+
+    // Fetch from Drive
     const content = await this.getFileContent(sessionId)
-    return JSON.parse(content)
+    const data = JSON.parse(content)
+
+    // Cache the result
+    const syncTime = Date.now()
+    this.cacheSet(cacheKey, { data, syncTime })
+
+    return { ...data, syncTime }
   }
 
   async saveSession(sessionId, data) {
-    // No caching - just save to Drive
-    return this.updateFile(sessionId, JSON.stringify(data, null, 2))
+    const result = await this.updateFile(sessionId, JSON.stringify(data, null, 2))
+
+    // Update cache
+    this.cacheSet(`session_${sessionId}`, { data, syncTime: Date.now() })
+
+    return result
   }
 
   async createSession(appId, name) {

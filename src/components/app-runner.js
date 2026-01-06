@@ -14,6 +14,7 @@ class AppRunner extends HTMLElement {
     this.saveTimeout = null
     this.iframe = null
     this._mounted = false
+    this.syncTime = null
   }
 
   static get observedAttributes() {
@@ -59,6 +60,7 @@ class AppRunner extends HTMLElement {
       this.manifest = files.manifest
       this.params = files.params || {}
       this.appHtml = files.appHtml
+      this.syncTime = files.syncTime
 
       // Load sessions
       this.sessions = await driveClient.listSessions(this.appId)
@@ -78,9 +80,9 @@ class AppRunner extends HTMLElement {
     this.render()
   }
 
-  async loadSession(sessionId) {
+  async loadSession(sessionId, forceRefresh = false) {
     try {
-      const session = await driveClient.getSession(sessionId)
+      const session = await driveClient.getSession(sessionId, forceRefresh)
       this.currentSession = { id: sessionId, ...session }
     } catch (err) {
       console.error('Failed to load session:', err)
@@ -181,6 +183,44 @@ class AppRunner extends HTMLElement {
     window.location.hash = `#/app/${this.appId}/edit`
   }
 
+  async handleReload() {
+    this.loading = true
+    this.render()
+
+    try {
+      // Force refresh app files from Drive
+      const files = await driveClient.getAppFiles(this.appId, true)
+      this.manifest = files.manifest
+      this.params = files.params || {}
+      this.appHtml = files.appHtml
+      this.syncTime = files.syncTime
+
+      // Reload current session from Drive
+      if (this.currentSession) {
+        await this.loadSession(this.currentSession.id, true)
+      }
+    } catch (err) {
+      console.error('Failed to reload:', err)
+      alert('Failed to reload: ' + err.message)
+    }
+
+    this.loading = false
+    this.render()
+  }
+
+  formatSyncTime(timestamp) {
+    if (!timestamp) return ''
+    const diff = Date.now() - timestamp
+    const seconds = Math.floor(diff / 1000)
+    if (seconds < 60) return 'just now'
+    const minutes = Math.floor(seconds / 60)
+    if (minutes < 60) return `${minutes}m ago`
+    const hours = Math.floor(minutes / 60)
+    if (hours < 24) return `${hours}h ago`
+    const days = Math.floor(hours / 24)
+    return `${days}d ago`
+  }
+
   bindEvents() {
     const backBtn = this.querySelector('[data-action="back"]')
     if (backBtn) {
@@ -190,6 +230,11 @@ class AppRunner extends HTMLElement {
     const editBtn = this.querySelector('[data-action="edit"]')
     if (editBtn) {
       editBtn.addEventListener('click', () => this.handleEdit())
+    }
+
+    const reloadBtn = this.querySelector('[data-action="reload"]')
+    if (reloadBtn) {
+      reloadBtn.addEventListener('click', () => this.handleReload())
     }
 
     // Session manager events
@@ -225,6 +270,10 @@ class AppRunner extends HTMLElement {
         ${this.loading ? `
           <div class="loading">Loading app...</div>
         ` : `
+          <div class="sync-bar">
+            <span class="sync-time">Synced ${this.formatSyncTime(this.syncTime)}</span>
+            <button class="sync-btn" data-action="reload">↻ Reload</button>
+          </div>
           <div class="runner-content">
             <iframe
               class="app-iframe"
@@ -269,6 +318,32 @@ class AppRunner extends HTMLElement {
           justify-content: center;
           flex: 1;
           color: #666;
+        }
+
+        .sync-bar {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 12px;
+          padding: 6px 16px;
+          background: #f8f9fa;
+          border-bottom: 1px solid #e0e0e0;
+          font-size: 13px;
+          color: #666;
+        }
+
+        .sync-btn {
+          background: none;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+          padding: 4px 10px;
+          font-size: 12px;
+          color: #666;
+          cursor: pointer;
+        }
+
+        .sync-btn:hover {
+          background: #e8e8e8;
         }
 
         .runner-content {
